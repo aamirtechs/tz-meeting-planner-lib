@@ -46,12 +46,16 @@ are IANA names such as `Asia/Karachi` or `Europe/London`.
 python3 tz_meeting_planner.py examples/team.json
 python3 tz_meeting_planner.py examples/team.json --json
 python3 tz_meeting_planner.py examples/team.json --check
+python3 tz_meeting_planner.py examples/team.json --format markdown
 python3 tz_meeting_planner.py examples/team.json --duration 30 --step 30
 ```
 
 `--json` prints the windows as JSON. `--check` exits 1 when no
-window fits, so it works as a gate in a script. `--duration`,
-`--days`, and `--step` override the request file.
+window fits, so it works as a gate in a script. `--format`
+selects the output shape: `text` (the default) or `markdown`,
+which renders the windows as a Markdown table with the UTC start
+and end plus one column per participant's local start time.
+`--duration`, `--days`, and `--step` override the request file.
 
 ## Real output
 

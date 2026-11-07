@@ -28,6 +28,7 @@ Usage:
     python3 tz_meeting_planner.py team.json
     python3 tz_meeting_planner.py team.json --json
     python3 tz_meeting_planner.py team.json --check
+    python3 tz_meeting_planner.py team.json --format markdown
     python3 tz_meeting_planner.py team.json --duration 30 --days 3
 """
 
@@ -193,12 +194,40 @@ def format_text(windows, request):
     return "\n".join(lines) + "\n"
 
 
+def format_markdown(windows, request):
+    """Render windows as a Markdown table, one row per window.
+
+    Columns are the UTC start and end plus one column per
+    participant's local start time, in request order. When no window
+    fits, the header-only table is followed by the usual
+    "No window fits" note.
+    """
+    names = [p["name"] for p in request["participants"]]
+    header = ["Start (UTC)", "End (UTC)"] + names
+    lines = ["| " + " | ".join(header) + " |",
+             "| " + " | ".join(["---"] * len(header)) + " |"]
+    for window in windows:
+        row = [window["start_utc"], window["end_utc"]]
+        row += [window["local_starts"].get(name, "") for name in names]
+        lines.append("| " + " | ".join(row) + " |")
+    if not windows:
+        lines.append("")
+        lines.append("No window fits every participant's working hours.")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Find meeting windows across time zones.")
     parser.add_argument("request", help="JSON request file")
-    parser.add_argument("--json", action="store_true",
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true",
                         help="print the windows as JSON")
+    output.add_argument("--format", choices=["text", "markdown"],
+                        default="text",
+                        help="output format; markdown renders the windows "
+                             "as a table with one column per participant's "
+                             "local start time")
     parser.add_argument("--check", action="store_true",
                         help="exit 1 when no window fits")
     parser.add_argument("--duration", type=int, default=None,
@@ -231,6 +260,8 @@ def main(argv=None):
     windows = find_windows(request)
     if args.json:
         print(json.dumps({"windows": windows}, indent=2))
+    elif args.format == "markdown":
+        print(format_markdown(windows, request), end="")
     else:
         print(format_text(windows, request), end="")
     if args.check and not windows:
