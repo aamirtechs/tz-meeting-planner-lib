@@ -36,9 +36,12 @@ search length:
 `work_start` and `work_end` are local times in HH:MM form.
 `workdays` uses weekday numbers where 0 is Monday and 6 is Sunday;
 it defaults to Monday to Friday and can also be set per participant.
-Overnight shifts are rejected, because a shift that crosses midnight
-needs an explicit rule for which day it belongs to. Time zone names
-are IANA names such as `Asia/Karachi` or `Europe/London`.
+Each participant may also list optional `blackouts` (for example
+holidays) as YYYY-MM-DD dates in their own time zone; any window
+falling on one of those dates is excluded for them. Overnight shifts
+are rejected, because a shift that crosses midnight needs an explicit
+rule for which day it belongs to. Time zone names are IANA names such
+as `Asia/Karachi` or `Europe/London`.
 
 ## Usage
 
@@ -105,9 +108,10 @@ print(windows[0]["start_utc"])  # 2026-11-02T14:00:00Z
 
 A window is valid only when, for every participant, the whole
 meeting falls on a single local calendar day, that day is one of
-their workdays, and the local start and end sit inside their
-working hours. A window that would cross local midnight is never
-returned, even if both days are workdays.
+their workdays, the local start and end sit inside their
+working hours, and the day is not one of their blackout dates.
+A window that would cross local midnight is never returned, even
+if both days are workdays.
 
 ## Tests
 

@@ -6,7 +6,8 @@ Input is a JSON file describing the participants and the search:
     {
       "participants": [
         {"name": "Amir", "timezone": "Asia/Karachi",
-         "work_start": "14:00", "work_end": "22:00"},
+         "work_start": "14:00", "work_end": "22:00",
+         "blackouts": ["2026-11-03"]},
         {"name": "Dana", "timezone": "America/New_York",
          "work_start": "09:00", "work_end": "17:00"}
       ],
@@ -19,9 +20,10 @@ Input is a JSON file describing the participants and the search:
 
 A window is valid when, for every participant, the whole meeting falls
 inside that participant's working hours on one of their workdays, in
-their own time zone. Windows are reported in UTC plus each
-participant's local start time. Only the Python standard library is
-used (zoneinfo for time zones).
+their own time zone, and does not touch one of their blackout dates
+(holidays, optional per participant). Windows are reported in UTC plus
+each participant's local start time. Only the Python standard library
+is used (zoneinfo for time zones).
 
 Usage:
 
@@ -50,6 +52,21 @@ def parse_hhmm(value, field):
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         raise ValueError("%s must be a real time of day, got %r" % (field, value))
     return time(hour, minute)
+
+
+def parse_blackouts(values, name):
+    """Parse an optional list of YYYY-MM-DD blackout dates into a set."""
+    if isinstance(values, str) or not isinstance(values, list):
+        raise ValueError(
+            "participant %s: blackouts must be a list of YYYY-MM-DD dates" % name)
+    parsed = set()
+    for value in values:
+        try:
+            parsed.add(date.fromisoformat(value))
+        except (TypeError, ValueError):
+            raise ValueError(
+                "participant %s: blackout %r must be a YYYY-MM-DD date" % (name, value))
+    return parsed
 
 
 def load_request(path):
@@ -82,9 +99,11 @@ def load_request(path):
         days = person.get("workdays", data.get("workdays", DEFAULT_WORKDAYS))
         if not days or any(d not in range(7) for d in days):
             raise ValueError("participant %s: workdays must be weekday numbers 0-6" % name)
+        blackouts = parse_blackouts(person.get("blackouts", []), name)
         parsed.append({"name": name, "timezone": tz_name,
                        "work_start": start, "work_end": end,
-                       "workdays": sorted(set(days))})
+                       "workdays": sorted(set(days)),
+                       "blackouts": blackouts})
     duration = data.get("duration_minutes", 60)
     if not isinstance(duration, int) or duration <= 0:
         raise ValueError("duration_minutes must be a positive integer")
@@ -106,12 +125,35 @@ def load_request(path):
             "days": days_count}
 
 
+def _normalize_blackouts(values):
+    """Coerce a blackout list (YYYY-MM-DD strings, dates, datetimes)
+    into a set of dates, matching load_request validation."""
+    if not isinstance(values, (list, set, tuple)):
+        raise ValueError("blackouts must be a list of YYYY-MM-DD dates")
+    parsed = set()
+    for value in values:
+        if isinstance(value, datetime):
+            parsed.add(value.date())
+        elif isinstance(value, date):
+            parsed.add(value)
+        elif isinstance(value, str):
+            try:
+                parsed.add(date.fromisoformat(value))
+            except ValueError:
+                raise ValueError("blackout %r must be a YYYY-MM-DD date" % value)
+        else:
+            raise ValueError("blackout %r must be a YYYY-MM-DD date" % value)
+    return parsed
+
+
 def _inside_work(person, start_utc, end_utc):
     """True when the whole UTC window fits one workday for a person."""
     tz = ZoneInfo(person["timezone"])
     local_start = start_utc.astimezone(tz)
     local_end = end_utc.astimezone(tz)
     if local_start.date() != local_end.date():
+        return False
+    if local_start.date() in person.get("blackouts", ()):
         return False
     if local_start.weekday() not in person["workdays"]:
         return False
@@ -141,6 +183,7 @@ def normalize_request(request):
         if isinstance(person.get("work_end"), str):
             person["work_end"] = parse_hhmm(person["work_end"], "work_end")
         person.setdefault("workdays", DEFAULT_WORKDAYS)
+        person["blackouts"] = _normalize_blackouts(person.get("blackouts", []))
         people.append(person)
     data["participants"] = people
     return data

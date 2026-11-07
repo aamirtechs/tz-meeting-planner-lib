@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Optional per-participant `blackouts` (for example holidays): a
+  list of YYYY-MM-DD dates in the participant's own time zone; any
+  window falling on one of those dates is excluded.
+
 ## 1.0.0 (2026-10-31)
 
 - First release.
