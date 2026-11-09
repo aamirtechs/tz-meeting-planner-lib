@@ -1,4 +1,5 @@
 # tz-meeting-planner-lib
+**Live tool:** https://aamirtechs.github.io/tz-meeting-planner-lib/ (runs in your browser, no install)
 
 Find meeting windows across time zones, respecting each person's
 working hours and workdays. No account, no upload, no dependencies.

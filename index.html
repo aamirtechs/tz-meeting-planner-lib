@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tz-meeting-planner-lib</title>
+<style>
+*{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f6f8fb;color:#17233b}
+header{background:#0b1f3a;color:#fff;padding:28px 20px;border-bottom:4px solid #d4a72c}
+header .wrap, main{max-width:900px;margin:0 auto}
+header h1{margin:0 0 6px;font-size:28px} header p{margin:0;color:#cfd9e8}
+main{padding:22px 16px 40px}
+.card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 10px rgba(11,31,58,.08)}
+label{font-weight:600;display:block;margin:14px 0 6px}
+textarea{width:100%;min-height:170px;padding:10px;border:1px solid #c9d3e0;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+textarea.small{min-height:90px}
+input[type=text],input[type=number],select{padding:8px 10px;border:1px solid #c9d3e0;border-radius:8px;max-width:100%}
+.row{display:flex;flex-wrap:wrap;gap:14px} .row>div{flex:1 1 180px}
+button{background:#0b1f3a;color:#fff;border:0;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:15px}
+button.accent{background:#d4a72c;color:#17233b;font-weight:700}
+button.secondary{background:#e7edf5;color:#0b1f3a}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+pre{background:#0b1f3a;color:#eef3fa;border-radius:10px;padding:16px;overflow:auto;white-space:pre-wrap;min-height:120px;font-size:13px}
+footer{max-width:900px;margin:0 auto;padding:0 16px 30px;color:#5a6a82;font-size:14px}
+a{color:#0b1f3a}
+.note{color:#5a6a82;font-size:13px}
+.checkline{font-weight:400;display:flex;gap:8px;align-items:center;margin-top:14px}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>tz-meeting-planner-lib</h1><p>Find meeting windows across time zones, respecting each person's working hours and workdays.</p></div></header>
+<main>
+<div class="card">
+<label for="file">Choose a file</label>
+<input type="file" id="file">
+<label for="input">Team request JSON input</label>
+<textarea id="input" placeholder="Paste the team JSON here, choose a file, or load the sample."></textarea>
+<div class="row"><div><label for="duration">Duration override (CLI --duration, blank uses file)</label><input type="number" id="duration" min="1"></div>
+<div><label for="days">Days override (CLI --days, blank uses file)</label><input type="number" id="days" min="1"></div>
+<div><label for="step">Step override (CLI --step, blank uses file)</label><input type="number" id="step" min="1"></div></div>
+<p class="note">Local times use the Intl time zone database in your browser, including daylight saving rules for the dates in the request.</p>
+<div class="btns">
+<button class="accent" id="run">Run</button>
+<button class="secondary" id="sample">Load sample</button>
+<button class="secondary" id="download">Download report</button>
+</div>
+<label for="output">Report</label>
+<pre id="output">Press Run to see the report.</pre>
+</div>
+</main>
+<footer>
+<p>Built by AamirTechs. <a href="https://aamirtechs.github.io/">All tools</a> | <a href="https://github.com/aamirtechs/tz-meeting-planner-lib">Source</a></p>
+<p>Privacy: this tool runs 100% in your browser, nothing is uploaded.</p>
+</footer>
+<script id="core">
+
+var DEFAULT_WORKDAYS = [0,1,2,3,4];
+function pyVal(v){ if(v===null||v===undefined) return "None"; if(v===true) return "True"; if(v===false) return "False"; return String(v); }
+function pyReprStr(s){
+  if(s.indexOf("'") >= 0 && s.indexOf('"') < 0) return '"' + s + '"';
+  return "'" + s.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+}
+function pyReprAny(v){ if(typeof v === "string") return pyReprStr(v); return pyVal(v); }
+function parsePyInt(s){ var t = String(s).trim(); if(!/^[+-]?\d+$/.test(t)) return null; return parseInt(t, 10); }
+function parseHhmm(value, field){
+  function fail(){ throw new Error(field + " must look like HH:MM, got " + pyReprAny(value)); }
+  if(typeof value !== "string") fail();
+  var parts = value.split(":");
+  if(parts.length !== 2) fail();
+  var h = parsePyInt(parts[0]), mi = parsePyInt(parts[1]);
+  if(h === null || mi === null || h < 0 || h > 23 || mi < 0 || mi > 59) fail();
+  return h * 60 + mi;
+}
+function isValidTz(name){
+  try { new Intl.DateTimeFormat("en-US", {"timeZone": name}); return true; }
+  catch(e){ return false; }
+}
+function parseStartDate(value){
+  if(typeof value !== "string") throw new Error("start_date must be YYYY-MM-DD, got " + pyReprAny(value));
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if(!m) throw new Error("start_date must be YYYY-MM-DD, got " + pyReprAny(value));
+  var y = +m[1], mo = +m[2], d = +m[3];
+  var ms = Date.UTC(y, mo - 1, d);
+  var check = new Date(ms);
+  if(check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d)
+    throw new Error("start_date must be YYYY-MM-DD, got " + pyReprAny(value));
+  return {"y": y, "m": mo, "d": d, "ms": ms};
+}
+function loadRequest(data){
+  if(!data || typeof data !== "object" || Array.isArray(data)) throw new Error("request file must contain a JSON object");
+  var participants = data.participants;
+  if(!participants || !Array.isArray(participants) || !participants.length) throw new Error("request needs a non-empty participants list");
+  var parsed = [];
+  participants.forEach(function(person, index){
+    if(!person || typeof person !== "object" || Array.isArray(person)) throw new Error("participant " + index + " must be an object");
+    var name = ("name" in person) ? person.name : "participant " + index;
+    var tzName = person.timezone;
+    if(!tzName) throw new Error("participant " + pyVal(name) + " is missing timezone");
+    if(typeof tzName !== "string" || !isValidTz(tzName)) throw new Error("participant " + pyVal(name) + " has unknown timezone " + pyReprAny(tzName));
+    var startMin = parseHhmm(("work_start" in person) ? person.work_start : "09:00", "work_start");
+    var endMin = parseHhmm(("work_end" in person) ? person.work_end : "17:00", "work_end");
+    if(endMin <= startMin) throw new Error("participant " + pyVal(name) + ": work_end must be after work_start (overnight shifts are not supported)");
+    var days = ("workdays" in person) ? person.workdays : (("workdays" in data) ? data.workdays : DEFAULT_WORKDAYS);
+    if(!days || !Array.isArray(days) || !days.length || days.some(function(d){ return !(typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6); }))
+      throw new Error("participant " + pyVal(name) + ": workdays must be weekday numbers 0-6");
+    parsed.push({"name": name, "timezone": tzName, "work_start": startMin, "work_end": endMin,
+      "workdays": Array.from(new Set(days)).sort(function(a,b){ return a - b; })});
+  });
+  var duration = ("duration_minutes" in data) ? data.duration_minutes : 60;
+  if(!(typeof duration === "number" && Number.isInteger(duration) && duration > 0)) throw new Error("duration_minutes must be a positive integer");
+  var step = ("step_minutes" in data) ? data.step_minutes : 30;
+  if(!(typeof step === "number" && Number.isInteger(step) && step > 0)) throw new Error("step_minutes must be a positive integer");
+  var startText = data.start_date;
+  if(!startText) throw new Error("request needs start_date in YYYY-MM-DD form");
+  var start = parseStartDate(startText);
+  var daysCount = ("days" in data) ? data.days : 5;
+  if(!(typeof daysCount === "number" && Number.isInteger(daysCount) && daysCount > 0)) throw new Error("days must be a positive integer");
+  return {"participants": parsed, "duration_minutes": duration, "step_minutes": step, "start": start, "days": daysCount};
+}
+var dtfCache = {};
+function getParts(ms, tz){
+  var dtf = dtfCache[tz];
+  if(!dtf){
+    dtf = new Intl.DateTimeFormat("en-US", {"timeZone": tz, "year": "numeric", "month": "2-digit", "day": "2-digit", "hour": "2-digit", "minute": "2-digit", "second": "2-digit", "hourCycle": "h23"});
+    dtfCache[tz] = dtf;
+  }
+  var parts = {};
+  dtf.formatToParts(new Date(ms)).forEach(function(p){ parts[p.type] = p.value; });
+  var h = parseInt(parts.hour, 10);
+  if(h === 24) h = 0;
+  return {"y": +parts.year, "mo": +parts.month, "d": +parts.day, "h": h, "mi": +parts.minute, "s": +parts.second};
+}
+function pad2(n){ return (n < 10 ? "0" : "") + n; }
+function dateStrOf(p){ return String(p.y).padStart(4, "0") + "-" + pad2(p.mo) + "-" + pad2(p.d); }
+function weekdayMon0(p){ return (new Date(Date.UTC(p.y, p.mo - 1, p.d)).getUTCDay() + 6) % 7; }
+function localIso(ms, tz){
+  var p = getParts(ms, tz);
+  var wallMs = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s);
+  var offMin = Math.round((wallMs - Math.floor(ms / 1000) * 1000) / 60000);
+  var sign = offMin < 0 ? "-" : "+";
+  var a = Math.abs(offMin);
+  return dateStrOf(p) + "T" + pad2(p.h) + ":" + pad2(p.mi) + ":" + pad2(p.s) + sign + pad2(Math.floor(a / 60)) + ":" + pad2(a % 60);
+}
+function utcIso(ms){
+  var dt = new Date(ms);
+  return String(dt.getUTCFullYear()).padStart(4, "0") + "-" + pad2(dt.getUTCMonth() + 1) + "-" + pad2(dt.getUTCDate()) +
+    "T" + pad2(dt.getUTCHours()) + ":" + pad2(dt.getUTCMinutes()) + ":" + pad2(dt.getUTCSeconds()) + "Z";
+}
+function insideWork(person, startMs, endMs){
+  var ls = getParts(startMs, person.timezone);
+  var le = getParts(endMs, person.timezone);
+  if(dateStrOf(ls) !== dateStrOf(le)) return false;
+  if(person.workdays.indexOf(weekdayMon0(ls)) < 0) return false;
+  var startSec = ls.h * 3600 + ls.mi * 60 + ls.s;
+  var endSec = le.h * 3600 + le.mi * 60 + le.s;
+  if(startSec < person.work_start * 60) return false;
+  if(endSec > person.work_end * 60) return false;
+  return true;
+}
+function findWindows(req){
+  var durMs = req.duration_minutes * 60000, stepMs = req.step_minutes * 60000;
+  var searchStart = req.start.ms, searchEnd = searchStart + req.days * 86400000;
+  var windows = [];
+  for(var cursor = searchStart; cursor + durMs <= searchEnd; cursor += stepMs){
+    var end = cursor + durMs;
+    var ok = true;
+    for(var i = 0; i < req.participants.length; i++){
+      if(!insideWork(req.participants[i], cursor, end)){ ok = false; break; }
+    }
+    if(ok){
+      var w = {"start_utc": utcIso(cursor), "end_utc": utcIso(end), "local_starts": {}};
+      req.participants.forEach(function(p){ w.local_starts[pyVal(p.name)] = localIso(cursor, p.timezone); });
+      windows.push(w);
+    }
+  }
+  return windows;
+}
+function formatText(windows, req){
+  var lines = [];
+  lines.push("Participants: " + req.participants.map(function(p){ return pyVal(p.name); }).join(", "));
+  lines.push("Duration: " + req.duration_minutes + " minutes");
+  if(!windows.length){
+    lines.push("No window fits every participant's working hours.");
+    return lines.join("\n");
+  }
+  lines.push("Found " + windows.length + " window(s):");
+  windows.forEach(function(w){
+    var locals = Object.keys(w.local_starts).map(function(k){ return k + " " + w.local_starts[k]; }).join(", ");
+    lines.push(w.start_utc + " to " + w.end_utc + " UTC (" + locals + ")");
+  });
+  return lines.join("\n");
+}
+window.runTool = function(inputText, options){
+  options = options || {};
+  var data;
+  try { data = JSON.parse(String(inputText == null ? "" : inputText)); }
+  catch(e){ return "error: invalid JSON: " + e.message; }
+  var req;
+  try { req = loadRequest(data); }
+  catch(e){ return "error: " + e.message; }
+  if(options.duration !== undefined && options.duration !== null && options.duration !== ""){
+    var d = Number(options.duration);
+    if(!(d > 0) || !Number.isInteger(d)) return "error: --duration must be positive";
+    req.duration_minutes = d;
+  }
+  if(options.days !== undefined && options.days !== null && options.days !== ""){
+    var dy = Number(options.days);
+    if(!(dy > 0) || !Number.isInteger(dy)) return "error: --days must be positive";
+    req.days = dy;
+  }
+  if(options.step !== undefined && options.step !== null && options.step !== ""){
+    var st = Number(options.step);
+    if(!(st > 0) || !Number.isInteger(st)) return "error: --step must be positive";
+    req.step_minutes = st;
+  }
+  var windows = findWindows(req);
+  return formatText(windows, req);
+};
+
+</script>
+<script>
+var SAMPLE = `{"days":5,"duration_minutes":60,"participants":[{"name":"Amir","timezone":"Asia/Karachi","work_end":"22:00","work_start":"14:00"},{"name":"Dana","timezone":"America/New_York","work_end":"17:00","work_start":"09:00"}],"start_date":"2026-11-02","step_minutes":60}`;
+var inputEl = document.getElementById("input");
+var outputEl = document.getElementById("output");
+document.getElementById("file").addEventListener("change", function(ev){
+  var f = ev.target.files[0]; if(!f) return;
+  var r = new FileReader(); r.onload = function(){ inputEl.value = r.result; }; r.readAsText(f);
+});
+function gatherOptions(){ function numVal(id){ var v = document.getElementById(id).value; return v === "" ? "" : parseInt(v, 10); } return { duration: numVal("duration"), days: numVal("days"), step: numVal("step") }; }
+document.getElementById("run").addEventListener("click", function(){
+  try { outputEl.textContent = window.runTool(inputEl.value, gatherOptions()); }
+  catch(e){ outputEl.textContent = "Error: " + e.message; }
+});
+document.getElementById("sample").addEventListener("click", function(){
+  inputEl.value = SAMPLE;
+  if (window.onSample) window.onSample();
+});
+document.getElementById("download").addEventListener("click", function(){
+  var blob = new Blob([outputEl.textContent], {type:"text/plain"});
+  var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "report.txt"; a.click(); URL.revokeObjectURL(a.href);
+});
+
+</script>
+</body>
+</html>
