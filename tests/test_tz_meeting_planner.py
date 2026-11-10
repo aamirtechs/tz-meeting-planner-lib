@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tz_meeting_planner import (  # noqa: E402
-    find_windows, format_text, load_request, parse_hhmm)
+    find_windows, format_markdown, format_text, load_request, parse_hhmm)
 
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "tz_meeting_planner.py")
@@ -90,6 +90,36 @@ class TestFindWindows(unittest.TestCase):
     def test_step_controls_granularity(self):
         self.assertEqual(len(find_windows(request(step_minutes=30))), 5)
         self.assertEqual(len(find_windows(request(step_minutes=60))), 3)
+
+
+class TestMarkdownFormat(unittest.TestCase):
+    def test_markdown_table_one_column_per_participant(self):
+        windows = find_windows(request())
+        text = format_markdown(windows, request())
+        lines = text.splitlines()
+        self.assertEqual(
+            lines[0],
+            "| Start (UTC) | End (UTC) | Amir | Dana |")
+        self.assertEqual(lines[1],
+                         "| --- | --- | --- | --- |")
+        self.assertEqual(len(lines), 5)
+        self.assertEqual(
+            lines[2],
+            "| 2026-11-02T14:00:00Z | 2026-11-02T15:00:00Z "
+            "| 2026-11-02T19:00:00+05:00 | 2026-11-02T09:00:00-05:00 |")
+
+    def test_markdown_row_per_window(self):
+        windows = find_windows(request())
+        text = format_markdown(windows, request())
+        rows = [line for line in text.splitlines() if line.startswith("| 2026")]
+        self.assertEqual(len(rows), len(windows))
+        for window, row in zip(windows, rows):
+            self.assertIn(window["start_utc"], row)
+
+    def test_markdown_empty_still_renders_header(self):
+        text = format_markdown([], request())
+        self.assertIn("| Start (UTC) | End (UTC) | Amir | Dana |", text)
+        self.assertIn("No window fits", text)
 
 
 class TestValidation(unittest.TestCase):
@@ -173,6 +203,24 @@ class TestCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         payload = json.loads(proc.stdout)
         self.assertEqual(len(payload["windows"]), 3)
+
+    def test_format_markdown_flag(self):
+        proc = self.run_cli(TEAM, "--format", "markdown")
+        self.assertEqual(proc.returncode, 0)
+        lines = proc.stdout.splitlines()
+        self.assertEqual(lines[0], "| Start (UTC) | End (UTC) | Amir | Dana |")
+        rows = [line for line in lines if line.startswith("| 2026")]
+        self.assertEqual(len(rows), 3)
+
+    def test_format_text_flag_keeps_plain_output(self):
+        proc = self.run_cli(TEAM, "--format", "text")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Found 3 window(s)", proc.stdout)
+
+    def test_format_markdown_conflicts_with_json(self):
+        proc = self.run_cli(TEAM, "--json", "--format", "markdown")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("error:", proc.stderr)
 
     def test_check_passes_with_windows(self):
         proc = self.run_cli(TEAM, "--check")
