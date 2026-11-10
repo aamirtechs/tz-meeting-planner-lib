@@ -92,6 +92,83 @@ class TestFindWindows(unittest.TestCase):
         self.assertEqual(len(find_windows(request(step_minutes=60))), 3)
 
 
+class TestBlackouts(unittest.TestCase):
+    def test_blackout_removes_windows_on_that_local_date(self):
+        data = request()
+        data["participants"][1]["blackouts"] = ["2026-11-02"]
+        self.assertEqual(find_windows(data), [])
+
+    def test_blackout_removes_only_that_date(self):
+        data = request(days=3)
+        data["participants"][0]["blackouts"] = ["2026-11-03"]
+        windows = find_windows(data)
+        self.assertEqual(len(windows), 6)
+        for window in windows:
+            self.assertFalse(window["start_utc"].startswith("2026-11-03"))
+
+    def test_blackout_outside_search_changes_nothing(self):
+        data = request()
+        data["participants"][0]["blackouts"] = ["2026-11-06"]
+        self.assertEqual(len(find_windows(data)), 3)
+
+    def test_blackout_dates_are_evaluated_in_each_local_zone(self):
+        # 01:00-04:00 UTC is 11-03 in Karachi but 11-02 in New York,
+        # so each participant's blackout is checked against their own
+        # local calendar day.
+        data = {
+            "participants": [
+                {"name": "Amir", "timezone": "Asia/Karachi",
+                 "work_start": "06:00", "work_end": "09:00"},
+                {"name": "Dana", "timezone": "America/New_York",
+                 "work_start": "20:00", "work_end": "23:00"},
+            ],
+            "duration_minutes": 60,
+            "start_date": "2026-11-03",
+            "days": 1,
+            "step_minutes": 60,
+        }
+        self.assertEqual(len(find_windows(data)), 3)
+        amir = dict(data, participants=[
+            dict(data["participants"][0], blackouts=["2026-11-03"]),
+            data["participants"][1]])
+        self.assertEqual(find_windows(amir), [])
+        dana = dict(data, participants=[
+            data["participants"][0],
+            dict(data["participants"][1], blackouts=["2026-11-02"])])
+        self.assertEqual(find_windows(dana), [])
+        other_day = dict(data, participants=[
+            data["participants"][0],
+            dict(data["participants"][1], blackouts=["2026-11-03"])])
+        self.assertEqual(len(find_windows(other_day)), 3)
+
+    def test_load_request_accepts_blackouts(self):
+        data = request()
+        data["participants"][1]["blackouts"] = ["2026-11-02"]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            parsed = load_request(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(parsed["participants"][1]["blackouts"],
+                         {date(2026, 11, 2)})
+        self.assertEqual(find_windows(parsed), [])
+
+    def test_blackout_rejections(self):
+        for bad in (["2026-13-40"], ["not-a-date"], "2026-11-02", [42]):
+            data = request()
+            data["participants"][0]["blackouts"] = bad
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+                json.dump(data, f)
+                path = f.name
+            try:
+                with self.assertRaises(ValueError):
+                    load_request(path)
+            finally:
+                os.unlink(path)
+
+
 class TestValidation(unittest.TestCase):
     def test_parse_hhmm_valid(self):
         self.assertEqual(str(parse_hhmm("09:30", "work_start")), "09:30:00")
@@ -196,6 +273,13 @@ class TestCli(unittest.TestCase):
                               capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2)
         self.assertIn("error:", proc.stderr)
+
+    def test_blackout_participant_excluded_via_cli(self):
+        data = request()
+        data["participants"][0]["blackouts"] = ["2026-11-02"]
+        proc = self.run_cli(data, "--check")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("No window fits", proc.stdout)
 
     def test_format_text_empty(self):
         text = format_text([], request())
