@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tz_meeting_planner import (  # noqa: E402
-    find_windows, format_text, load_request, parse_hhmm)
+    find_best_window, find_windows, format_text, load_request, parse_hhmm)
 
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "tz_meeting_planner.py")
@@ -21,6 +21,17 @@ TEAM = {
         {"name": "Amir", "timezone": "Asia/Karachi",
          "work_start": "14:00", "work_end": "22:00"},
         {"name": "Dana", "timezone": "America/New_York",
+         "work_start": "09:00", "work_end": "17:00"},
+    ],
+    "duration_minutes": 60,
+    "start_date": "2026-11-02",
+    "days": 1,
+    "step_minutes": 60,
+}
+
+SOLO = {
+    "participants": [
+        {"name": "Solo", "timezone": "UTC",
          "work_start": "09:00", "work_end": "17:00"},
     ],
     "duration_minutes": 60,
@@ -90,6 +101,25 @@ class TestFindWindows(unittest.TestCase):
     def test_step_controls_granularity(self):
         self.assertEqual(len(find_windows(request(step_minutes=30))), 5)
         self.assertEqual(len(find_windows(request(step_minutes=60))), 3)
+
+
+class TestBestWindow(unittest.TestCase):
+    def test_best_window_has_largest_gap_to_edges(self):
+        # 15:00Z sits one hour from Dana's start and one hour from
+        # Amir's end; both other windows touch an edge (slack 0).
+        windows = find_windows(request())
+        best = find_best_window(windows, request())
+        self.assertEqual(best["start_utc"], "2026-11-02T15:00:00Z")
+
+    def test_best_window_tie_breaks_by_earliest_start(self):
+        # Solo 09:00-17:00 UTC: 12:00Z and 13:00Z both have 180 minutes
+        # of slack on each side; the earliest one wins.
+        windows = find_windows(SOLO)
+        best = find_best_window(windows, SOLO)
+        self.assertEqual(best["start_utc"], "2026-11-02T12:00:00Z")
+
+    def test_best_window_none_when_no_windows(self):
+        self.assertIsNone(find_best_window([], request()))
 
 
 class TestValidation(unittest.TestCase):
@@ -173,6 +203,28 @@ class TestCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         payload = json.loads(proc.stdout)
         self.assertEqual(len(payload["windows"]), 3)
+
+    def test_best_flag_prints_single_window(self):
+        proc = self.run_cli(TEAM, "--best")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("Found 1 window(s)", proc.stdout)
+        self.assertIn("2026-11-02T15:00:00Z", proc.stdout)
+        self.assertNotIn("2026-11-02T14:00:00Z", proc.stdout)
+
+    def test_best_flag_with_json(self):
+        proc = self.run_cli(TEAM, "--best", "--json")
+        self.assertEqual(proc.returncode, 0)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(len(payload["windows"]), 1)
+        self.assertEqual(payload["windows"][0]["start_utc"],
+                         "2026-11-02T15:00:00Z")
+
+    def test_best_flag_check_fails_without_windows(self):
+        data = request()
+        data["participants"][1]["work_start"] = "00:00"
+        data["participants"][1]["work_end"] = "01:00"
+        proc = self.run_cli(data, "--best", "--check")
+        self.assertEqual(proc.returncode, 1)
 
     def test_check_passes_with_windows(self):
         proc = self.run_cli(TEAM, "--check")

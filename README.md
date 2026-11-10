@@ -47,12 +47,16 @@ are IANA names such as `Asia/Karachi` or `Europe/London`.
 python3 tz_meeting_planner.py examples/team.json
 python3 tz_meeting_planner.py examples/team.json --json
 python3 tz_meeting_planner.py examples/team.json --check
+python3 tz_meeting_planner.py examples/team.json --best
 python3 tz_meeting_planner.py examples/team.json --duration 30 --step 30
 ```
 
 `--json` prints the windows as JSON. `--check` exits 1 when no
-window fits, so it works as a gate in a script. `--duration`,
-`--days`, and `--step` override the request file.
+window fits, so it works as a gate in a script. `--best` prints
+only the window with the most slack: the largest gap to the
+nearest working-hours edge across all participants, with ties
+broken by earliest start. `--duration`, `--days`, and `--step`
+override the request file.
 
 ## Real output
 

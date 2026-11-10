@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `--best` flag: print only the window with the most slack (largest
+  gap to the nearest working-hours edge across all participants),
+  ties broken by earliest start.
+
 ## 1.0.0 (2026-10-31)
 
 - First release.

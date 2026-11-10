@@ -28,6 +28,7 @@ Usage:
     python3 tz_meeting_planner.py team.json
     python3 tz_meeting_planner.py team.json --json
     python3 tz_meeting_planner.py team.json --check
+    python3 tz_meeting_planner.py team.json --best
     python3 tz_meeting_planner.py team.json --duration 30 --days 3
 """
 
@@ -174,6 +175,55 @@ def find_windows(request):
     return windows
 
 
+def _minutes_of_day(value):
+    """Minutes since midnight for a time or a datetime."""
+    return value.hour * 60 + value.minute
+
+
+def _window_slack(window, people):
+    """Smallest gap, in minutes, from a window to a working-hours edge.
+
+    For every participant the gap from the window's local start to
+    their work_start and from their work_end back to the local end is
+    measured; the window's slack is the smallest of those gaps across
+    all participants. Valid windows never sit outside working hours,
+    so gaps are never negative.
+    """
+    slack = None
+    for name, person in people.items():
+        start_local = datetime.fromisoformat(window["local_starts"][name])
+        end_local = datetime.fromisoformat(
+            window["end_utc"].replace("Z", "+00:00")).astimezone(start_local.tzinfo)
+        gap_start = _minutes_of_day(start_local) - _minutes_of_day(person["work_start"])
+        gap_end = _minutes_of_day(person["work_end"]) - _minutes_of_day(end_local)
+        nearest = min(gap_start, gap_end)
+        if slack is None or nearest < slack:
+            slack = nearest
+    return slack
+
+
+def find_best_window(windows, request):
+    """Return the window with the most slack, or None when windows is empty.
+
+    Slack is the largest gap to the nearest working-hours edge across
+    all participants: each window is scored by its smallest gap to any
+    participant's work_start or work_end, and the window whose score
+    is highest wins. Ties go to the earliest window, so the result is
+    stable.
+    """
+    if not windows:
+        return None
+    request = normalize_request(request)
+    people = {p["name"]: p for p in request["participants"]}
+    best = windows[0]
+    best_slack = _window_slack(best, people)
+    for window in windows[1:]:
+        slack = _window_slack(window, people)
+        if slack > best_slack:
+            best, best_slack = window, slack
+    return best
+
+
 def format_text(windows, request):
     """Render windows as plain text, one line per window."""
     lines = []
@@ -199,6 +249,9 @@ def main(argv=None):
     parser.add_argument("request", help="JSON request file")
     parser.add_argument("--json", action="store_true",
                         help="print the windows as JSON")
+    parser.add_argument("--best", action="store_true",
+                        help="print only the window with the most slack, "
+                             "ties broken by earliest start")
     parser.add_argument("--check", action="store_true",
                         help="exit 1 when no window fits")
     parser.add_argument("--duration", type=int, default=None,
@@ -229,6 +282,8 @@ def main(argv=None):
             return 2
         request["step_minutes"] = args.step
     windows = find_windows(request)
+    if args.best and windows:
+        windows = [find_best_window(windows, request)]
     if args.json:
         print(json.dumps({"windows": windows}, indent=2))
     else:
